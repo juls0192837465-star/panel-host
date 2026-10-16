@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel Serveur Minecraft</title>
+<style>
+  :root {
+    --bg:#0f1117; --panel:#181b24; --panel2:#1f2330; --border:#2a2f3f;
+    --text:#e6e8ef; --muted:#8b92a8; --green:#3ddc84; --red:#ff5d6c; --orange:#ffb454; --blue:#5aa9ff;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:18px 28px; border-bottom:1px solid var(--border); background:var(--panel); }
+  header h1 { margin:0; font-size:1.15rem; font-weight:600; }
+  .pill { padding:6px 14px; border-radius:999px; font-size:.85rem; font-weight:600; background:var(--panel2); border:1px solid var(--border); }
+  .pill.on { color:var(--green); border-color:rgba(61,220,132,.4); }
+  .pill.off { color:var(--red); border-color:rgba(255,93,108,.4); }
+  main { max-width:1100px; margin:0 auto; padding:24px 28px 40px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; margin-bottom:18px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+  .label { color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.8px; margin-bottom:6px; }
+  .value { font-size:1.35rem; font-weight:600; }
+  .sub { color:var(--muted); font-size:.8rem; margin-top:4px; }
+  .bar { height:6px; background:var(--panel2); border-radius:6px; margin-top:10px; overflow:hidden; }
+  .bar > div { height:100%; background:var(--blue); width:0; transition:width .4s; }
+  .players { margin-bottom:18px; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  .chip { background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:5px 11px; font-size:.9rem; }
+  .console { padding:0; overflow:hidden; }
+  .console-head { padding:12px 18px; border-bottom:1px solid var(--border); font-weight:600; display:flex; justify-content:space-between; align-items:center; }
+  .console-head small { color:var(--muted); font-weight:400; }
+  #log { height:420px; overflow-y:auto; padding:12px 18px; font-family:Consolas,"Cascadia Mono",monospace; font-size:.82rem; line-height:1.5; background:#0b0d12; }
+  #log div { white-space:pre-wrap; word-break:break-word; }
+  .l-warn { color:var(--orange); } .l-error { color:var(--red); } .l-cmd { color:var(--blue); } .l-out { color:var(--green); } .l-info { color:#c9cee0; }
+  form { display:flex; border-top:1px solid var(--border); background:var(--panel); }
+  form span { padding:13px 0 13px 18px; color:var(--blue); font-family:Consolas,monospace; }
+  form input { flex:1; background:transparent; border:0; outline:0; color:var(--text); font-family:Consolas,"Cascadia Mono",monospace; font-size:.9rem; padding:13px 12px; }
+  form button { background:var(--blue); color:#06101f; border:0; padding:0 22px; font-weight:700; cursor:pointer; }
+  form button:disabled { opacity:.5; cursor:default; }
+</style>
+</head>
+<body>
+<header><h1>&#9935; Panel Serveur Minecraft</h1><span id="pill" class="pill">Chargement...</span></header>
+<main>
+  <section class="grid">
+    <div class="card"><div class="label">Joueurs</div><div class="value" id="players-count">-</div><div class="sub" id="players-max"></div></div>
+    <div class="card"><div class="label">TPS</div><div class="value" id="tps">-</div><div class="sub">derniere minute</div></div>
+    <div class="card"><div class="label">Memoire (Java)</div><div class="value" id="ram">-</div><div class="sub">utilisee</div></div>
+    <div class="card"><div class="label">Disque libre</div><div class="value" id="disk">-</div><div class="bar"><div id="disk-bar"></div></div></div>
+    <div class="card"><div class="label">Derniere sauvegarde</div><div class="value" id="backup" style="font-size:1.05rem">-</div></div>
+    <div class="card"><div class="label">Adresse</div><div class="value" id="address" style="font-size:1rem;word-break:break-all">-</div></div>
+  </section>
+  <section class="card players"><div class="label">Joueurs connectes</div><div class="chips" id="chips"><span class="sub">Aucun</span></div></section>
+  <section class="card console">
+    <div class="console-head">Console <small>directe, sans passer par Discord</small></div>
+    <div id="log"></div>
+    <form id="cmdform"><span>&gt;</span><input id="cmd" autocomplete="off" spellcheck="false" placeholder="Tape une commande (ex : list, say Salut, whitelist add pseudo)"><button id="send" type="submit">Envoyer</button></form>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const logBox = $("log");
+let logPos = -1, partial = "";
+const history = [];
+let hIndex = 0;
+const ANSI = /\x1b\[[0-9;]*m/g;
+
+function classify(t) {
+  if (/ WARN\]/.test(t)) return "l-warn";
+  if (/ (ERROR|FATAL)\]/.test(t)) return "l-error";
+  return "l-info";
+}
+function addLine(text, cls) {
+  const nearBottom = logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 60;
+  const d = document.createElement("div");
+  d.className = cls || classify(text);
+  d.textContent = text;
+  logBox.appendChild(d);
+  while (logBox.childElementCount > 600) logBox.removeChild(logBox.firstChild);
+  if (nearBottom) logBox.scrollTop = logBox.scrollHeight;
+}
+function pushText(text) {
+  const parts = (partial + text).replace(ANSI, "").split(/\r?\n/);
+  partial = parts.pop();
+  parts.forEach(p => { if (p !== "") addLine(p); });
+}
+async function api(path, options) {
+  options = options || {};
+  options.headers = Object.assign({"X-Dashboard": "1"}, options.headers || {});
+  const res = await fetch(path, options);
+  return res.json();
+}
+async function pollLogs() {
+  try {
+    const data = await api("/api/logs?pos=" + logPos);
+    if (data.reset) { logBox.innerHTML = ""; partial = ""; }
+    logPos = data.pos;
+    let text = data.text;
+    if (data.tail) {
+      const i = text.indexOf("\n");
+      text = i >= 0 ? text.slice(i + 1) : "";
+    }
+    if (text) pushText(text);
+  } catch (e) {}
+}
+async function pollStatus() {
+  try {
+    const s = await api("/api/status");
+    const pill = $("pill");
+    pill.textContent = s.running ? "● En ligne" : "● Hors ligne";
+    pill.className = "pill " + (s.running ? "on" : "off");
+    $("players-count").textContent = (s.running && s.player_count !== null) ? s.player_count : "-";
+    $("players-max").textContent = s.max_players ? "sur " + s.max_players : "";
+    const t = $("tps");
+    if (s.tps !== null) {
+      t.textContent = s.tps.toFixed(1);
+      t.style.color = s.tps >= 18 ? "var(--green)" : (s.tps >= 15 ? "var(--orange)" : "var(--red)");
+    } else { t.textContent = "-"; t.style.color = ""; }
+    $("ram").textContent = s.ram_mb !== null ? (s.ram_mb / 1024).toFixed(1) + " Go" : "-";
+    if (s.disk_free_gb !== null) {
+      $("disk").textContent = Math.round(s.disk_free_gb) + " Go";
+      $("disk-bar").style.width = (100 - (s.disk_free_gb / s.disk_total_gb) * 100).toFixed(0) + "%";
+    }
+    $("backup").textContent = s.last_backup || "Aucune";
+    $("address").textContent = s.address;
+    const chips = $("chips");
+    chips.innerHTML = "";
+    if (s.players.length) {
+      s.players.forEach(n => { const c = document.createElement("span"); c.className = "chip"; c.textContent = n; chips.appendChild(c); });
+    } else {
+      const c = document.createElement("span"); c.className = "sub"; c.textContent = "Aucun"; chips.appendChild(c);
+    }
+  } catch (e) {}
+}
+$("cmdform").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = $("cmd");
+  const cmd = input.value.trim();
+  if (!cmd) return;
+  history.push(cmd);
+  hIndex = history.length;
+  input.value = "";
+  addLine("> " + cmd, "l-cmd");
+  $("send").disabled = true;
+  try {
+    const data = await api("/api/command", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({command: cmd})});
+    if (data.error) addLine(data.error, "l-error");
+    else data.output.split(/\r?\n/).forEach(l => addLine(l, "l-out"));
+  } catch (err) { addLine("Erreur de connexion au bot.", "l-error"); }
+  $("send").disabled = false;
+  input.focus();
+});
+$("cmd").addEventListener("keydown", e => {
+  if (e.key === "ArrowUp" && history.length) { hIndex = Math.max(0, hIndex - 1); e.target.value = history[hIndex] || ""; e.preventDefault(); }
+  else if (e.key === "ArrowDown") { hIndex = Math.min(history.length, hIndex + 1); e.target.value = history[hIndex] || ""; e.preventDefault(); }
+});
+pollStatus();
+pollLogs();
+setInterval(pollLogs, 2000);
+setInterval(pollStatus, 10000);
+</script>
+</body>
+</html>
